@@ -431,11 +431,17 @@ impl Controller {
         self.send_realtime(cmd)
     }
 
-    /// Run a frame/boundary trace at low power.
+    /// Run a frame/boundary trace.
     ///
     /// Traces a rectangle from (x_min, y_min) to (x_max, y_max) at the
-    /// specified feed rate and laser power (S value). Uses G1 moves with
-    /// laser mode (M4) so the laser only fires during motion.
+    /// specified feed rate and laser power (S value).
+    ///
+    /// # Arguments
+    /// * `x_min`, `x_max`, `y_min`, `y_max` - Boundary coordinates
+    /// * `feed` - Feed rate in units/min
+    /// * `power` - Laser power (S value, typically 0-1000)
+    /// * `units` - Units mode (mm or inches)
+    /// * `mode` - Laser mode (M4 low power, M3 constant, or laser off)
     ///
     /// # Errors
     /// Returns an error if:
@@ -451,6 +457,7 @@ impl Controller {
         feed: f64,
         power: u32,
         units: protocol::Units,
+        mode: protocol::FrameMode,
     ) -> Result<(), ControllerError> {
         if !self.is_connected() {
             return Err(ControllerError::NotConnected);
@@ -477,7 +484,8 @@ impl Controller {
             }
         }
 
-        let gcode = protocol::build_frame_gcode(x_min, x_max, y_min, y_max, feed, power, units);
+        let gcode =
+            protocol::build_frame_gcode(x_min, x_max, y_min, y_max, feed, power, units, mode);
 
         // Send each line of the frame GCode
         for line in gcode.lines() {

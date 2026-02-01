@@ -143,9 +143,55 @@ impl Default for Units {
     }
 }
 
+/// Frame/boundary trace laser mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FrameMode {
+    /// M4 - Dynamic power mode (laser only fires during motion, power scales with speed)
+    /// Best for visibility at low power without burning
+    LowPower,
+    /// M3 - Constant power mode (laser fires at set power regardless of speed)
+    /// Use with caution - can burn at corners/slow speeds
+    ConstantPower,
+    /// No laser - rapid moves only (G0), for checking travel path
+    /// Useful when you just want to verify the machine reaches all corners
+    LaserOff,
+}
+
+impl FrameMode {
+    /// Returns the GCode for enabling this mode, if any
+    pub fn start_gcode(&self, power: u32) -> Option<String> {
+        match self {
+            FrameMode::LowPower => Some(format!("M4 S{}", power)),
+            FrameMode::ConstantPower => Some(format!("M3 S{}", power)),
+            FrameMode::LaserOff => None,
+        }
+    }
+
+    /// Returns the GCode for disabling the laser, if needed
+    pub fn stop_gcode(&self) -> Option<&'static str> {
+        match self {
+            FrameMode::LowPower | FrameMode::ConstantPower => Some("M5"),
+            FrameMode::LaserOff => None,
+        }
+    }
+
+    /// Whether to use G1 (feed moves) or G0 (rapid moves) for the trace
+    pub fn use_feed_moves(&self) -> bool {
+        match self {
+            FrameMode::LowPower | FrameMode::ConstantPower => true,
+            FrameMode::LaserOff => false,
+        }
+    }
+}
+
+impl Default for FrameMode {
+    fn default() -> Self {
+        FrameMode::LowPower
+    }
+}
+
 /// Build GCode for tracing a rectangular frame/boundary.
 ///
-/// Uses laser mode (M4) so the laser only fires during motion.
 /// Returns to starting position after trace.
 ///
 /// # Arguments
@@ -154,6 +200,7 @@ impl Default for Units {
 /// * `feed` - Feed rate in units/min
 /// * `power` - Laser power (S value, typically 0-1000)
 /// * `units` - Units mode (mm or inches)
+/// * `mode` - Laser mode (M4 low power, M3 constant, or laser off)
 pub fn build_frame_gcode(
     x_min: f64,
     x_max: f64,
@@ -162,30 +209,48 @@ pub fn build_frame_gcode(
     feed: f64,
     power: u32,
     units: Units,
+    mode: FrameMode,
 ) -> String {
     // Normalize bounds (ensure min <= max)
     let (x0, x1) = if x_min <= x_max { (x_min, x_max) } else { (x_max, x_min) };
     let (y0, y1) = if y_min <= y_max { (y_min, y_max) } else { (y_max, y_min) };
 
-    // G90 = absolute positioning
-    // G20/G21 = inches/mm mode
-    // M4 = laser mode (dynamic power, only fires during motion)
-    // S = spindle/laser power
-    // G1 = linear move with power
-    // G0 = rapid move (laser off in M4 mode)
-    // M5 = laser off
-    format!(
-        "G90 {units}\n\
-         M4 S{power}\n\
-         G0 X{x0:.3} Y{y0:.3}\n\
-         G1 X{x1:.3} Y{y0:.3} F{feed:.0}\n\
-         G1 X{x1:.3} Y{y1:.3}\n\
-         G1 X{x0:.3} Y{y1:.3}\n\
-         G1 X{x0:.3} Y{y0:.3}\n\
-         M5\n\
-         G0 X{x0:.3} Y{y0:.3}\n",
-        units = units.gcode()
-    )
+    let mut gcode = String::new();
+
+    // G90 = absolute positioning, G20/G21 = inches/mm mode
+    gcode.push_str(&format!("G90 {}\n", units.gcode()));
+
+    // Start laser mode if applicable
+    if let Some(start) = mode.start_gcode(power) {
+        gcode.push_str(&start);
+        gcode.push('\n');
+    }
+
+    // Move to start position (always rapid)
+    gcode.push_str(&format!("G0 X{x0:.3} Y{y0:.3}\n"));
+
+    // Trace the rectangle
+    if mode.use_feed_moves() {
+        // G1 moves with feed rate (laser fires in M3/M4 mode)
+        gcode.push_str(&format!("G1 X{x1:.3} Y{y0:.3} F{feed:.0}\n"));
+        gcode.push_str(&format!("G1 X{x1:.3} Y{y1:.3}\n"));
+        gcode.push_str(&format!("G1 X{x0:.3} Y{y1:.3}\n"));
+        gcode.push_str(&format!("G1 X{x0:.3} Y{y0:.3}\n"));
+    } else {
+        // G0 rapid moves (no laser, just checking travel)
+        gcode.push_str(&format!("G0 X{x1:.3} Y{y0:.3}\n"));
+        gcode.push_str(&format!("G0 X{x1:.3} Y{y1:.3}\n"));
+        gcode.push_str(&format!("G0 X{x0:.3} Y{y1:.3}\n"));
+        gcode.push_str(&format!("G0 X{x0:.3} Y{y0:.3}\n"));
+    }
+
+    // Stop laser if applicable
+    if let Some(stop) = mode.stop_gcode() {
+        gcode.push_str(stop);
+        gcode.push('\n');
+    }
+
+    gcode
 }
 
 /// Response types from GRBL

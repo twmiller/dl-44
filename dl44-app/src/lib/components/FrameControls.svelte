@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { connected, machineState, runFrame, type Units } from "../stores/machine";
+  import {
+    connected,
+    machineState,
+    runFrame,
+    type Units,
+    type FrameMode,
+  } from "../stores/machine";
 
   // Frame boundary (job bounds would come from workspace in real usage)
   let xMin = 0;
@@ -11,10 +17,38 @@
   let frameFeed = 1000; // mm/min
   let framePower = 10; // S value (low power for visibility, not cutting)
   let frameUnits: Units = "Mm";
+  let frameMode: FrameMode = "LowPower";
 
   // Preset power levels for frame
   const powerPresets = [5, 10, 20, 50];
   const feedPresets = [500, 1000, 2000, 3000];
+
+  // Mode options for UI
+  const modeOptions: Array<{
+    value: FrameMode;
+    label: string;
+    description: string;
+  }> = [
+    {
+      value: "LowPower",
+      label: "M4 Low Power",
+      description: "Dynamic power - scales with speed, safe for corners",
+    },
+    {
+      value: "ConstantPower",
+      label: "M3 Constant",
+      description: "Constant power - may burn at slow speeds/corners",
+    },
+    {
+      value: "LaserOff",
+      label: "Guide Only",
+      description: "No laser - rapid moves to check travel path",
+    },
+  ];
+
+  // Get current mode description
+  $: currentModeDescription =
+    modeOptions.find((m) => m.value === frameMode)?.description ?? "";
 
   let error: string | null = null;
   let running = false;
@@ -23,13 +57,25 @@
     error = null;
     running = true;
     try {
-      await runFrame(xMin, xMax, yMin, yMax, frameFeed, framePower, frameUnits);
+      await runFrame(
+        xMin,
+        xMax,
+        yMin,
+        yMax,
+        frameFeed,
+        framePower,
+        frameUnits,
+        frameMode
+      );
     } catch (e: any) {
       error = e.message || String(e);
     } finally {
       running = false;
     }
   }
+
+  // Power controls are only relevant when laser is on
+  $: showPowerControls = frameMode !== "LaserOff";
 
   $: canFrame = $connected && $machineState === "idle" && !running;
 </script>
@@ -38,6 +84,24 @@
   <h3>Frame / Boundary Check</h3>
 
   <div class="frame-settings">
+    <div class="mode-selector">
+      <span class="group-label">Laser Mode</span>
+      <div class="mode-options">
+        {#each modeOptions as option}
+          <button
+            class="mode-btn"
+            class:selected={frameMode === option.value}
+            on:click={() => (frameMode = option.value)}
+            disabled={!$connected}
+            title={option.description}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
+      <span class="mode-description">{currentModeDescription}</span>
+    </div>
+
     <div class="param-row">
       <span class="param-label">Units</span>
       <div class="button-group">
@@ -119,21 +183,23 @@
       </div>
     </div>
 
-    <div class="param-row">
-      <span class="param-label">Power (S)</span>
-      <div class="button-group">
-        {#each powerPresets as preset}
-          <button
-            class:selected={framePower === preset}
-            on:click={() => (framePower = preset)}
-            disabled={!$connected}
-          >
-            {preset}
-          </button>
-        {/each}
+    {#if showPowerControls}
+      <div class="param-row">
+        <span class="param-label">Power (S)</span>
+        <div class="button-group">
+          {#each powerPresets as preset}
+            <button
+              class:selected={framePower === preset}
+              on:click={() => (framePower = preset)}
+              disabled={!$connected}
+            >
+              {preset}
+            </button>
+          {/each}
+        </div>
+        <span class="power-note">Low power for visibility</span>
       </div>
-      <span class="power-note">Low power for visibility</span>
-    </div>
+    {/if}
   </div>
 
   <button class="run-frame-btn" on:click={handleRunFrame} disabled={!canFrame}>
@@ -188,6 +254,50 @@
   .group-label {
     font-size: 0.8rem;
     color: #666;
+  }
+
+  .mode-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .mode-options {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .mode-btn {
+    flex: 1;
+    padding: 0.4rem 0.5rem;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 3px;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .mode-btn:hover:not(:disabled) {
+    background: #333;
+  }
+
+  .mode-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .mode-btn.selected {
+    background: #00bcd4;
+    border-color: #00bcd4;
+    color: white;
+  }
+
+  .mode-description {
+    font-size: 0.7rem;
+    color: #666;
+    font-style: italic;
   }
 
   .bounds-inputs {

@@ -195,7 +195,10 @@ stores/
    - GRBL status parsing
    - Jog controls with step/feed selection
    - Home/unlock/reset commands
-2) [ ] Overrides implementation
+2) [x] Overrides and Frame implementation
+   - Feed/spindle/rapid override controls (±1%, ±10%, reset)
+   - Override percentages shown in status bar when modified
+   - Frame/boundary trace at configurable power/speed
 3) [ ] SVG/bitmap import -> workspace render
 4) [ ] Layers/ops -> GCode generation
 5) [ ] Preview + time estimate

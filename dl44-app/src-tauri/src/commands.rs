@@ -7,7 +7,7 @@ use crate::grbl::{
     ConnectionState, Controller, ControllerError, ControllerSnapshot, MachineStatus,
     OverrideAdjust, PortInfo, RapidOverride,
 };
-use crate::grbl::protocol::Units;
+use crate::grbl::protocol::{FrameMode, Units};
 use crate::grbl::protocol::SUPPORTED_BAUD_RATES;
 
 /// Application state holding the controller
@@ -201,9 +201,10 @@ pub fn run_frame(
     feed: f64,
     power: u32,
     units: Units,
+    mode: FrameMode,
 ) -> CommandResult<()> {
     state
         .controller
-        .run_frame(x_min, x_max, y_min, y_max, feed, power, units)
+        .run_frame(x_min, x_max, y_min, y_max, feed, power, units, mode)
         .map_err(CommandError::from)
 }

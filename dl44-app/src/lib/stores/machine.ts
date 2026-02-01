@@ -499,6 +499,8 @@ export type RapidOverride = "Full" | "Half" | "Quarter";
 
 export type Units = "Mm" | "Inches";
 
+export type FrameMode = "LowPower" | "ConstantPower" | "LaserOff";
+
 // Override actions
 
 /** Adjust feed rate override */
@@ -542,7 +544,8 @@ export async function runFrame(
   yMax: number,
   feed: number,
   power: number,
-  units: Units = "Mm"
+  units: Units = "Mm",
+  mode: FrameMode = "LowPower"
 ): Promise<void> {
   try {
     await invoke("run_frame", {
@@ -553,6 +556,7 @@ export async function runFrame(
       feed,
       power,
       units,
+      mode,
     });
   } catch (e) {
     const error = parseError(e);
