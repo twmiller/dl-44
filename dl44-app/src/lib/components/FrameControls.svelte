@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { connected, machineState, runFrame } from "../stores/machine";
+  import { connected, machineState, runFrame, type Units } from "../stores/machine";
 
   // Frame boundary (job bounds would come from workspace in real usage)
   let xMin = 0;
@@ -10,6 +10,7 @@
   // Frame settings
   let frameFeed = 1000; // mm/min
   let framePower = 10; // S value (low power for visibility, not cutting)
+  let frameUnits: Units = "Mm";
 
   // Preset power levels for frame
   const powerPresets = [5, 10, 20, 50];
@@ -22,7 +23,7 @@
     error = null;
     running = true;
     try {
-      await runFrame(xMin, xMax, yMin, yMax, frameFeed, framePower);
+      await runFrame(xMin, xMax, yMin, yMax, frameFeed, framePower, frameUnits);
     } catch (e: any) {
       error = e.message || String(e);
     } finally {
@@ -37,8 +38,28 @@
   <h3>Frame / Boundary Check</h3>
 
   <div class="frame-settings">
+    <div class="param-row">
+      <span class="param-label">Units</span>
+      <div class="button-group">
+        <button
+          class:selected={frameUnits === "Mm"}
+          on:click={() => (frameUnits = "Mm")}
+          disabled={!$connected}
+        >
+          mm
+        </button>
+        <button
+          class:selected={frameUnits === "Inches"}
+          on:click={() => (frameUnits = "Inches")}
+          disabled={!$connected}
+        >
+          in
+        </button>
+      </div>
+    </div>
+
     <div class="bounds-group">
-      <span class="group-label">Bounds (mm)</span>
+      <span class="group-label">Bounds ({frameUnits === "Mm" ? "mm" : "in"})</span>
       <div class="bounds-inputs">
         <div class="bound-field">
           <label for="x-min">X min</label>

@@ -121,16 +121,39 @@ pub fn build_jog_command(
 /// Jog cancel command (real-time)
 pub const JOG_CANCEL: u8 = 0x85;
 
+/// Units for frame GCode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Units {
+    Mm,
+    Inches,
+}
+
+impl Units {
+    pub fn gcode(&self) -> &'static str {
+        match self {
+            Units::Mm => "G21",
+            Units::Inches => "G20",
+        }
+    }
+}
+
+impl Default for Units {
+    fn default() -> Self {
+        Units::Mm
+    }
+}
+
 /// Build GCode for tracing a rectangular frame/boundary.
 ///
 /// Uses laser mode (M4) so the laser only fires during motion.
 /// Returns to starting position after trace.
 ///
 /// # Arguments
-/// * `x_min`, `x_max` - X bounds
-/// * `y_min`, `y_max` - Y bounds
+/// * `x_min`, `x_max` - X bounds (will be normalized if inverted)
+/// * `y_min`, `y_max` - Y bounds (will be normalized if inverted)
 /// * `feed` - Feed rate in units/min
 /// * `power` - Laser power (S value, typically 0-1000)
+/// * `units` - Units mode (mm or inches)
 pub fn build_frame_gcode(
     x_min: f64,
     x_max: f64,
@@ -138,24 +161,30 @@ pub fn build_frame_gcode(
     y_max: f64,
     feed: f64,
     power: u32,
+    units: Units,
 ) -> String {
+    // Normalize bounds (ensure min <= max)
+    let (x0, x1) = if x_min <= x_max { (x_min, x_max) } else { (x_max, x_min) };
+    let (y0, y1) = if y_min <= y_max { (y_min, y_max) } else { (y_max, y_min) };
+
     // G90 = absolute positioning
-    // G21 = mm mode (standard for most laser setups)
+    // G20/G21 = inches/mm mode
     // M4 = laser mode (dynamic power, only fires during motion)
     // S = spindle/laser power
     // G1 = linear move with power
     // G0 = rapid move (laser off in M4 mode)
     // M5 = laser off
     format!(
-        "G90 G21\n\
+        "G90 {units}\n\
          M4 S{power}\n\
-         G0 X{x_min:.3} Y{y_min:.3}\n\
-         G1 X{x_max:.3} Y{y_min:.3} F{feed:.0}\n\
-         G1 X{x_max:.3} Y{y_max:.3}\n\
-         G1 X{x_min:.3} Y{y_max:.3}\n\
-         G1 X{x_min:.3} Y{y_min:.3}\n\
+         G0 X{x0:.3} Y{y0:.3}\n\
+         G1 X{x1:.3} Y{y0:.3} F{feed:.0}\n\
+         G1 X{x1:.3} Y{y1:.3}\n\
+         G1 X{x0:.3} Y{y1:.3}\n\
+         G1 X{x0:.3} Y{y0:.3}\n\
          M5\n\
-         G0 X{x_min:.3} Y{y_min:.3}\n"
+         G0 X{x0:.3} Y{y0:.3}\n",
+        units = units.gcode()
     )
 }
 

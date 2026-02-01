@@ -497,6 +497,8 @@ export type OverrideAdjust =
 
 export type RapidOverride = "Full" | "Half" | "Quarter";
 
+export type Units = "Mm" | "Inches";
+
 // Override actions
 
 /** Adjust feed rate override */
@@ -539,7 +541,8 @@ export async function runFrame(
   yMin: number,
   yMax: number,
   feed: number,
-  power: number
+  power: number,
+  units: Units = "Mm"
 ): Promise<void> {
   try {
     await invoke("run_frame", {
@@ -549,6 +552,7 @@ export async function runFrame(
       yMax,
       feed,
       power,
+      units,
     });
   } catch (e) {
     const error = parseError(e);
@@ -557,8 +561,20 @@ export async function runFrame(
   }
 }
 
-// Derived store for overrides
-export const overrides = derived(
+// Derived store for overrides (null means not reported by device)
+export const overridesRaw = derived(
   machineStatus,
-  ($status): Overrides => $status.overrides ?? { feed: 100, rapid: 100, spindle: 100 }
+  ($status): Overrides | null => $status.overrides
+);
+
+// Derived store for overrides with default fallback
+export const overrides = derived(
+  overridesRaw,
+  ($raw): Overrides => $raw ?? { feed: 100, rapid: 100, spindle: 100 }
+);
+
+// Whether overrides are actually reported by the device
+export const overridesReported = derived(
+  overridesRaw,
+  ($raw): boolean => $raw !== null
 );

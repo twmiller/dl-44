@@ -7,6 +7,7 @@
     connected,
     statusIsFresh,
     overrides,
+    overridesReported,
   } from "../stores/machine";
 
   function formatPos(n: number): string {
@@ -82,7 +83,11 @@
       </div>
     {/if}
 
-    {#if $overrides.feed !== 100 || $overrides.spindle !== 100 || $overrides.rapid !== 100}
+    {#if !$overridesReported}
+      <div class="override-display not-reported" title="Overrides not reported (check $10 setting)">
+        <span class="override-item">Ovr: N/A</span>
+      </div>
+    {:else if $overrides.feed !== 100 || $overrides.spindle !== 100 || $overrides.rapid !== 100}
       <div class="override-display">
         {#if $overrides.feed !== 100}
           <span class="override-item feed" title="Feed override">
@@ -214,6 +219,16 @@
     background: rgba(255, 152, 0, 0.1);
     border: 1px solid #ff9800;
     border-radius: 4px;
+  }
+
+  .override-display.not-reported {
+    background: rgba(100, 100, 100, 0.1);
+    border-color: #666;
+  }
+
+  .override-display.not-reported .override-item {
+    color: #666;
+    font-style: italic;
   }
 
   .override-item {

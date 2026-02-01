@@ -436,6 +436,12 @@ impl Controller {
     /// Traces a rectangle from (x_min, y_min) to (x_max, y_max) at the
     /// specified feed rate and laser power (S value). Uses G1 moves with
     /// laser mode (M4) so the laser only fires during motion.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Not connected
+    /// - Machine not in Idle state
+    /// - Frame has zero area (x_min == x_max or y_min == y_max)
     pub fn run_frame(
         &self,
         x_min: f64,
@@ -444,9 +450,20 @@ impl Controller {
         y_max: f64,
         feed: f64,
         power: u32,
+        units: protocol::Units,
     ) -> Result<(), ControllerError> {
         if !self.is_connected() {
             return Err(ControllerError::NotConnected);
+        }
+
+        // Validate bounds - must have non-zero area
+        // Note: inverted bounds (min > max) are normalized in build_frame_gcode
+        let width = (x_max - x_min).abs();
+        let height = (y_max - y_min).abs();
+        if width < f64::EPSILON || height < f64::EPSILON {
+            return Err(ControllerError::InvalidState(
+                "Frame must have non-zero width and height".into(),
+            ));
         }
 
         // Validate state - can only frame when idle
@@ -460,7 +477,7 @@ impl Controller {
             }
         }
 
-        let gcode = protocol::build_frame_gcode(x_min, x_max, y_min, y_max, feed, power);
+        let gcode = protocol::build_frame_gcode(x_min, x_max, y_min, y_max, feed, power, units);
 
         // Send each line of the frame GCode
         for line in gcode.lines() {
