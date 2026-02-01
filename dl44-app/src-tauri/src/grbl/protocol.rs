@@ -220,14 +220,15 @@ pub fn build_frame_gcode(
     // G90 = absolute positioning, G20/G21 = inches/mm mode
     gcode.push_str(&format!("G90 {}\n", units.gcode()));
 
-    // Start laser mode if applicable
+    // Move to start position FIRST (always rapid, laser off)
+    // This must happen before enabling laser to avoid burning during travel
+    gcode.push_str(&format!("G0 X{x0:.3} Y{y0:.3}\n"));
+
+    // Start laser mode if applicable (after reaching start position)
     if let Some(start) = mode.start_gcode(power) {
         gcode.push_str(&start);
         gcode.push('\n');
     }
-
-    // Move to start position (always rapid)
-    gcode.push_str(&format!("G0 X{x0:.3} Y{y0:.3}\n"));
 
     // Trace the rectangle
     if mode.use_feed_moves() {
