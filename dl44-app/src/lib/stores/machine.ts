@@ -92,26 +92,26 @@ export interface UIError {
 }
 
 // Helper to check connection state type
-export function isConnected(state: ConnectionState): boolean {
-  return "Connected" in state;
+export function isConnected(state: ConnectionState | null | undefined): boolean {
+  return state != null && typeof state === "object" && "Connected" in state;
 }
 
-export function isDisconnected(state: ConnectionState): boolean {
-  return "Disconnected" in state;
+export function isDisconnected(state: ConnectionState | null | undefined): boolean {
+  return state != null && typeof state === "object" && "Disconnected" in state;
 }
 
-export function isConnecting(state: ConnectionState): boolean {
-  return "Connecting" in state;
+export function isConnecting(state: ConnectionState | null | undefined): boolean {
+  return state != null && typeof state === "object" && "Connecting" in state;
 }
 
-export function hasError(state: ConnectionState): boolean {
-  return "Error" in state;
+export function hasError(state: ConnectionState | null | undefined): boolean {
+  return state != null && typeof state === "object" && "Error" in state;
 }
 
 export function getConnectionInfo(
-  state: ConnectionState
+  state: ConnectionState | null | undefined
 ): { port: string; baud: number } | null {
-  if ("Connected" in state) {
+  if (state != null && typeof state === "object" && "Connected" in state) {
     return state.Connected;
   }
   return null;
@@ -168,31 +168,47 @@ export const lastError = derived(errors, ($errors) =>
   $errors.find((e) => !e.dismissed) ?? null
 );
 
+// Default values for when snapshot is null
+const defaultConnectionState: ConnectionState = { Disconnected: null };
+const defaultStatus: MachineStatus = {
+  state: "unknown",
+  machine_pos: { x: 0, y: 0, z: 0 },
+  work_pos: null,
+  work_offset: null,
+  feed_rate: null,
+  spindle_speed: null,
+  overrides: null,
+  input_pins: null,
+  accessories: null,
+  buffer: null,
+  line_number: null,
+};
+
 // Derived stores for convenience
 
 export const connectionState = derived(
   controllerSnapshot,
-  ($snapshot) => $snapshot?.connection ?? { Disconnected: null }
+  ($snapshot): ConnectionState => $snapshot?.connection ?? defaultConnectionState
 );
 
 export const machineStatus = derived(
   controllerSnapshot,
-  ($snapshot) => $snapshot?.status ?? null
+  ($snapshot): MachineStatus => $snapshot?.status ?? defaultStatus
 );
 
 export const machineState = derived(
   machineStatus,
-  ($status) => $status?.state ?? "unknown"
+  ($status): MachineState => $status.state
 );
 
 export const machinePosition = derived(
   machineStatus,
-  ($status) => $status?.machine_pos ?? { x: 0, y: 0, z: 0 }
+  ($status): Position => $status.machine_pos
 );
 
 export const workPosition = derived(
   machineStatus,
-  ($status) => $status?.work_pos ?? $status?.machine_pos ?? { x: 0, y: 0, z: 0 }
+  ($status): Position => $status.work_pos ?? $status.machine_pos
 );
 
 export const connected = derived(connectionState, ($state) =>
@@ -469,3 +485,80 @@ export async function softReset(): Promise<void> {
 export async function initializeStores(): Promise<void> {
   await Promise.all([refreshPorts(), loadBaudRates(), refreshSnapshot()]);
 }
+
+// Override types matching Rust enums
+
+export type OverrideAdjust =
+  | "Reset"
+  | "CoarsePlus"
+  | "CoarseMinus"
+  | "FinePlus"
+  | "FineMinus";
+
+export type RapidOverride = "Full" | "Half" | "Quarter";
+
+// Override actions
+
+/** Adjust feed rate override */
+export async function feedOverride(adjust: OverrideAdjust): Promise<void> {
+  try {
+    await invoke("feed_override", { adjust });
+  } catch (e) {
+    const error = parseError(e);
+    addError(error);
+    throw error;
+  }
+}
+
+/** Set rapid override preset */
+export async function rapidOverride(preset: RapidOverride): Promise<void> {
+  try {
+    await invoke("rapid_override", { preset });
+  } catch (e) {
+    const error = parseError(e);
+    addError(error);
+    throw error;
+  }
+}
+
+/** Adjust spindle/laser power override */
+export async function spindleOverride(adjust: OverrideAdjust): Promise<void> {
+  try {
+    await invoke("spindle_override", { adjust });
+  } catch (e) {
+    const error = parseError(e);
+    addError(error);
+    throw error;
+  }
+}
+
+/** Run a frame/boundary trace */
+export async function runFrame(
+  xMin: number,
+  xMax: number,
+  yMin: number,
+  yMax: number,
+  feed: number,
+  power: number
+): Promise<void> {
+  try {
+    await invoke("run_frame", {
+      xMin,
+      xMax,
+      yMin,
+      yMax,
+      feed,
+      power,
+    });
+  } catch (e) {
+    const error = parseError(e);
+    addError(error);
+    throw error;
+  }
+}
+
+// Derived store for overrides
+export const overrides = derived(
+  machineStatus,
+  ($status): Overrides => $status.overrides ?? { feed: 100, rapid: 100, spindle: 100 }
+);

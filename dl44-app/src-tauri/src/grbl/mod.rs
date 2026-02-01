@@ -13,6 +13,9 @@ pub mod serial;
 pub mod status;
 pub mod worker;
 
-pub use controller::{ConnectionState, Controller, ControllerError, ControllerSnapshot};
+pub use controller::{
+    ConnectionState, Controller, ControllerError, ControllerSnapshot, OverrideAdjust,
+    RapidOverride,
+};
 pub use serial::PortInfo;
 pub use status::MachineStatus;

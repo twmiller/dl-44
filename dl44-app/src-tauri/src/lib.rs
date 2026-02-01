@@ -40,6 +40,12 @@ pub fn run() {
             commands::feed_hold,
             commands::cycle_start,
             commands::soft_reset,
+            // Override commands
+            commands::feed_override,
+            commands::rapid_override,
+            commands::spindle_override,
+            // Frame command
+            commands::run_frame,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

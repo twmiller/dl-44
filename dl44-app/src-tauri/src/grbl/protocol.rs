@@ -121,6 +121,44 @@ pub fn build_jog_command(
 /// Jog cancel command (real-time)
 pub const JOG_CANCEL: u8 = 0x85;
 
+/// Build GCode for tracing a rectangular frame/boundary.
+///
+/// Uses laser mode (M4) so the laser only fires during motion.
+/// Returns to starting position after trace.
+///
+/// # Arguments
+/// * `x_min`, `x_max` - X bounds
+/// * `y_min`, `y_max` - Y bounds
+/// * `feed` - Feed rate in units/min
+/// * `power` - Laser power (S value, typically 0-1000)
+pub fn build_frame_gcode(
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    feed: f64,
+    power: u32,
+) -> String {
+    // G90 = absolute positioning
+    // G21 = mm mode (standard for most laser setups)
+    // M4 = laser mode (dynamic power, only fires during motion)
+    // S = spindle/laser power
+    // G1 = linear move with power
+    // G0 = rapid move (laser off in M4 mode)
+    // M5 = laser off
+    format!(
+        "G90 G21\n\
+         M4 S{power}\n\
+         G0 X{x_min:.3} Y{y_min:.3}\n\
+         G1 X{x_max:.3} Y{y_min:.3} F{feed:.0}\n\
+         G1 X{x_max:.3} Y{y_max:.3}\n\
+         G1 X{x_min:.3} Y{y_max:.3}\n\
+         G1 X{x_min:.3} Y{y_min:.3}\n\
+         M5\n\
+         G0 X{x_min:.3} Y{y_min:.3}\n"
+    )
+}
+
 /// Response types from GRBL
 #[derive(Debug, Clone, PartialEq)]
 pub enum Response {

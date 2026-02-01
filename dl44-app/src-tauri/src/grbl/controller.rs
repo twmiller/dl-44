@@ -370,6 +370,111 @@ impl Default for Controller {
     }
 }
 
+/// Override adjustment type
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum OverrideAdjust {
+    /// Reset to 100%
+    Reset,
+    /// Increase by 10%
+    CoarsePlus,
+    /// Decrease by 10%
+    CoarseMinus,
+    /// Increase by 1%
+    FinePlus,
+    /// Decrease by 1%
+    FineMinus,
+}
+
+/// Rapid override preset
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum RapidOverride {
+    /// 100%
+    Full,
+    /// 50%
+    Half,
+    /// 25%
+    Quarter,
+}
+
+impl Controller {
+    /// Adjust feed rate override.
+    pub fn feed_override(&self, adjust: OverrideAdjust) -> Result<(), ControllerError> {
+        let cmd = match adjust {
+            OverrideAdjust::Reset => protocol::realtime::FEED_OVR_RESET,
+            OverrideAdjust::CoarsePlus => protocol::realtime::FEED_OVR_COARSE_PLUS,
+            OverrideAdjust::CoarseMinus => protocol::realtime::FEED_OVR_COARSE_MINUS,
+            OverrideAdjust::FinePlus => protocol::realtime::FEED_OVR_FINE_PLUS,
+            OverrideAdjust::FineMinus => protocol::realtime::FEED_OVR_FINE_MINUS,
+        };
+        self.send_realtime(cmd)
+    }
+
+    /// Set rapid override preset.
+    pub fn rapid_override(&self, preset: RapidOverride) -> Result<(), ControllerError> {
+        let cmd = match preset {
+            RapidOverride::Full => protocol::realtime::RAPID_OVR_RESET,
+            RapidOverride::Half => protocol::realtime::RAPID_OVR_HALF,
+            RapidOverride::Quarter => protocol::realtime::RAPID_OVR_QUARTER,
+        };
+        self.send_realtime(cmd)
+    }
+
+    /// Adjust spindle/laser power override.
+    pub fn spindle_override(&self, adjust: OverrideAdjust) -> Result<(), ControllerError> {
+        let cmd = match adjust {
+            OverrideAdjust::Reset => protocol::realtime::SPINDLE_OVR_RESET,
+            OverrideAdjust::CoarsePlus => protocol::realtime::SPINDLE_OVR_COARSE_PLUS,
+            OverrideAdjust::CoarseMinus => protocol::realtime::SPINDLE_OVR_COARSE_MINUS,
+            OverrideAdjust::FinePlus => protocol::realtime::SPINDLE_OVR_FINE_PLUS,
+            OverrideAdjust::FineMinus => protocol::realtime::SPINDLE_OVR_FINE_MINUS,
+        };
+        self.send_realtime(cmd)
+    }
+
+    /// Run a frame/boundary trace at low power.
+    ///
+    /// Traces a rectangle from (x_min, y_min) to (x_max, y_max) at the
+    /// specified feed rate and laser power (S value). Uses G1 moves with
+    /// laser mode (M4) so the laser only fires during motion.
+    pub fn run_frame(
+        &self,
+        x_min: f64,
+        x_max: f64,
+        y_min: f64,
+        y_max: f64,
+        feed: f64,
+        power: u32,
+    ) -> Result<(), ControllerError> {
+        if !self.is_connected() {
+            return Err(ControllerError::NotConnected);
+        }
+
+        // Validate state - can only frame when idle
+        {
+            let state = self.state.lock();
+            if state.status.state != MachineState::Idle {
+                return Err(ControllerError::InvalidState(format!(
+                    "Cannot run frame in {:?} state",
+                    state.status.state
+                )));
+            }
+        }
+
+        let gcode = protocol::build_frame_gcode(x_min, x_max, y_min, y_max, feed, power);
+
+        // Send each line of the frame GCode
+        for line in gcode.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            self.send_command(&format!("{}\n", line))?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Serializable snapshot of controller state for the UI
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ControllerSnapshot {

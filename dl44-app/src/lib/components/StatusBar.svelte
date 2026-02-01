@@ -6,6 +6,7 @@
     machineStatus,
     connected,
     statusIsFresh,
+    overrides,
   } from "../stores/machine";
 
   function formatPos(n: number): string {
@@ -78,6 +79,26 @@
       <div class="rate-display">
         <span class="rate-label">S:</span>
         <span class="rate-value">{$machineStatus?.spindle_speed ?? 0}</span>
+      </div>
+    {/if}
+
+    {#if $overrides.feed !== 100 || $overrides.spindle !== 100 || $overrides.rapid !== 100}
+      <div class="override-display">
+        {#if $overrides.feed !== 100}
+          <span class="override-item feed" title="Feed override">
+            F:{$overrides.feed}%
+          </span>
+        {/if}
+        {#if $overrides.rapid !== 100}
+          <span class="override-item rapid" title="Rapid override">
+            R:{$overrides.rapid}%
+          </span>
+        {/if}
+        {#if $overrides.spindle !== 100}
+          <span class="override-item spindle" title="Spindle/Laser override">
+            S:{$overrides.spindle}%
+          </span>
+        {/if}
       </div>
     {/if}
   {:else}
@@ -184,5 +205,31 @@
   .disconnected-message {
     color: #666;
     font-style: italic;
+  }
+
+  .override-display {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.2rem 0.5rem;
+    background: rgba(255, 152, 0, 0.1);
+    border: 1px solid #ff9800;
+    border-radius: 4px;
+  }
+
+  .override-item {
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .override-item.feed {
+    color: #4caf50;
+  }
+
+  .override-item.rapid {
+    color: #2196f3;
+  }
+
+  .override-item.spindle {
+    color: #ff9800;
   }
 </style>

@@ -4,7 +4,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::grbl::{
-    ConnectionState, Controller, ControllerError, ControllerSnapshot, MachineStatus, PortInfo,
+    ConnectionState, Controller, ControllerError, ControllerSnapshot, MachineStatus,
+    OverrideAdjust, PortInfo, RapidOverride,
 };
 use crate::grbl::protocol::SUPPORTED_BAUD_RATES;
 
@@ -159,4 +160,48 @@ pub fn cycle_start(state: State<AppState>) -> CommandResult<()> {
 #[tauri::command]
 pub fn soft_reset(state: State<AppState>) -> CommandResult<()> {
     state.controller.soft_reset().map_err(CommandError::from)
+}
+
+/// Adjust feed rate override
+#[tauri::command]
+pub fn feed_override(state: State<AppState>, adjust: OverrideAdjust) -> CommandResult<()> {
+    state
+        .controller
+        .feed_override(adjust)
+        .map_err(CommandError::from)
+}
+
+/// Set rapid override preset
+#[tauri::command]
+pub fn rapid_override(state: State<AppState>, preset: RapidOverride) -> CommandResult<()> {
+    state
+        .controller
+        .rapid_override(preset)
+        .map_err(CommandError::from)
+}
+
+/// Adjust spindle/laser power override
+#[tauri::command]
+pub fn spindle_override(state: State<AppState>, adjust: OverrideAdjust) -> CommandResult<()> {
+    state
+        .controller
+        .spindle_override(adjust)
+        .map_err(CommandError::from)
+}
+
+/// Run a frame/boundary trace
+#[tauri::command]
+pub fn run_frame(
+    state: State<AppState>,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+    feed: f64,
+    power: u32,
+) -> CommandResult<()> {
+    state
+        .controller
+        .run_frame(x_min, x_max, y_min, y_max, feed, power)
+        .map_err(CommandError::from)
 }
