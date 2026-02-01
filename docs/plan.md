@@ -199,7 +199,15 @@ stores/
    - Feed/spindle/rapid override controls (±1%, ±10%, reset)
    - Override percentages shown in status bar when modified
    - Frame/boundary trace at configurable power/speed
-3) [ ] SVG/bitmap import -> workspace render
+   - Frame modes: M4 low power (default), M3 constant, Laser Off
+   - Units selection (mm/inches)
+3) [x] SVG/bitmap import -> workspace render
+   - File import via dialog + drag-drop
+   - SVG and bitmap (PNG, JPG, GIF, BMP, WebP) support
+   - Document list with visibility toggles
+   - 2D canvas rendering with pan/zoom
+   - Workspace bounds exposed to Frame panel ("Use job bounds" toggle)
+   - Basic persistence (save/restore workspace to JSON)
 4) [ ] Layers/ops -> GCode generation
 5) [ ] Preview + time estimate
 6) [ ] Job streaming + pause/resume/stop

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import MachinePanel from "./lib/components/MachinePanel.svelte";
+  import WorkspacePanel from "./lib/components/WorkspacePanel.svelte";
   import ErrorToast from "./lib/components/ErrorToast.svelte";
   import { initializeStores, stopPolling } from "./lib/stores/machine";
 
@@ -36,8 +37,13 @@
       <p>Initializing...</p>
     </div>
   {:else}
-    <div class="content">
-      <MachinePanel />
+    <div class="app-layout">
+      <div class="workspace-area">
+        <WorkspacePanel />
+      </div>
+      <div class="controls-area">
+        <MachinePanel />
+      </div>
     </div>
   {/if}
 
@@ -80,9 +86,24 @@
     font-size: 0.9rem;
   }
 
-  .content {
+  .app-layout {
     flex: 1;
+    display: flex;
+    gap: 1rem;
     padding: 1rem;
+    overflow: hidden;
+  }
+
+  .workspace-area {
+    flex: 1;
+    display: flex;
+    min-width: 400px;
+  }
+
+  .controls-area {
+    width: 450px;
+    flex-shrink: 0;
+    overflow-y: auto;
   }
 
   .loading,

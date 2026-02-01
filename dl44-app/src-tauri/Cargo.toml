@@ -27,5 +27,15 @@ parking_lot = "0.12"
 log = "0.4"
 env_logger = "0.11"
 
+# Image handling for bitmap import
+image = "0.25"
+base64 = "0.22"
+
+# Regex for SVG parsing
+regex = "1"
+
+# Tauri plugins
+tauri-plugin-dialog = "2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

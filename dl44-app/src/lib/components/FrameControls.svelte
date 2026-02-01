@@ -6,12 +6,24 @@
     type Units,
     type FrameMode,
   } from "../stores/machine";
+  import { workspaceBounds } from "../stores/workspace";
 
-  // Frame boundary (job bounds would come from workspace in real usage)
+  // Frame boundary - linked to workspace bounds or manual entry
   let xMin = 0;
   let xMax = 100;
   let yMin = 0;
   let yMax = 100;
+  let useWorkspaceBounds = true;
+
+  // Sync with workspace bounds when enabled
+  $: if (useWorkspaceBounds && $workspaceBounds) {
+    xMin = $workspaceBounds.x_min;
+    xMax = $workspaceBounds.x_max;
+    yMin = $workspaceBounds.y_min;
+    yMax = $workspaceBounds.y_max;
+  }
+
+  $: hasWorkspaceBounds = $workspaceBounds !== null;
 
   // Frame settings
   let frameFeed = 1000; // mm/min
@@ -123,7 +135,19 @@
     </div>
 
     <div class="bounds-group">
-      <span class="group-label">Bounds ({frameUnits === "Mm" ? "mm" : "in"})</span>
+      <div class="bounds-header">
+        <span class="group-label">Bounds ({frameUnits === "Mm" ? "mm" : "in"})</span>
+        {#if hasWorkspaceBounds}
+          <label class="auto-bounds-toggle">
+            <input
+              type="checkbox"
+              bind:checked={useWorkspaceBounds}
+              disabled={!$connected}
+            />
+            <span>Use job bounds</span>
+          </label>
+        {/if}
+      </div>
       <div class="bounds-inputs">
         <div class="bound-field">
           <label for="x-min">X min</label>
@@ -132,7 +156,7 @@
             type="number"
             bind:value={xMin}
             step="1"
-            disabled={!$connected}
+            disabled={!$connected || useWorkspaceBounds}
           />
         </div>
         <div class="bound-field">
@@ -142,7 +166,7 @@
             type="number"
             bind:value={xMax}
             step="1"
-            disabled={!$connected}
+            disabled={!$connected || useWorkspaceBounds}
           />
         </div>
         <div class="bound-field">
@@ -152,7 +176,7 @@
             type="number"
             bind:value={yMin}
             step="1"
-            disabled={!$connected}
+            disabled={!$connected || useWorkspaceBounds}
           />
         </div>
         <div class="bound-field">
@@ -162,7 +186,7 @@
             type="number"
             bind:value={yMax}
             step="1"
-            disabled={!$connected}
+            disabled={!$connected || useWorkspaceBounds}
           />
         </div>
       </div>
@@ -298,6 +322,30 @@
     font-size: 0.7rem;
     color: #666;
     font-style: italic;
+  }
+
+  .bounds-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .auto-bounds-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: #888;
+    cursor: pointer;
+  }
+
+  .auto-bounds-toggle input {
+    cursor: pointer;
+  }
+
+  .auto-bounds-toggle:hover {
+    color: #aaa;
   }
 
   .bounds-inputs {

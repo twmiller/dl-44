@@ -4,6 +4,7 @@
   "description": "Default desktop capability for DL-44.",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:default"
   ]
 }

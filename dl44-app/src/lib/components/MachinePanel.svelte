@@ -21,8 +21,6 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 1rem;
-    max-width: 600px;
   }
 
   .panel-content {
