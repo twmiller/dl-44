@@ -1,7 +1,9 @@
 //! High-level GRBL controller coordinating serial worker and state.
 //!
 //! The controller maintains machine state and delegates all serial I/O
-//! to a dedicated worker thread, ensuring Tauri commands never block.
+//! to a dedicated worker thread. While command handlers block waiting for
+//! the worker response, the actual serial I/O is isolated, preventing
+//! issues with port access and providing centralized timeout handling.
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -23,9 +25,6 @@ pub enum ControllerError {
 
     #[error("Already connected")]
     AlreadyConnected,
-
-    #[error("Command failed: {0}")]
-    CommandFailed(String),
 
     #[error("Command timeout after {0} attempts")]
     Timeout(u32),
@@ -52,8 +51,7 @@ impl From<WorkerError> for ControllerError {
             WorkerError::Timeout { attempts } => ControllerError::Timeout(attempts),
             WorkerError::GrblError(code) => ControllerError::GrblError(code),
             WorkerError::Alarm(code) => ControllerError::Alarm(code),
-            WorkerError::WorkerDead => ControllerError::Internal("Worker thread died".into()),
-            WorkerError::Cancelled => ControllerError::Internal("Request cancelled".into()),
+            WorkerError::WorkerDead => ControllerError::Internal("Worker thread not responding".into()),
         }
     }
 }
@@ -80,13 +78,15 @@ struct ControllerState {
     status: MachineStatus,
     last_error: Option<String>,
     welcome_message: Option<String>,
+    /// Alarm code if device entered alarm during polling
+    pending_alarm: Option<u32>,
 }
 
 /// GRBL controller instance.
 ///
 /// Thread-safe controller that delegates serial I/O to a worker thread.
-/// All public methods return immediately (non-blocking from the caller's perspective),
-/// though they wait for the worker to complete the operation.
+/// Command handlers block waiting for the worker response (with timeout),
+/// but serial I/O is isolated in the worker thread.
 pub struct Controller {
     worker: WorkerHandle,
     state: Mutex<ControllerState>,
@@ -128,6 +128,7 @@ impl Controller {
             let mut state = self.state.lock();
             state.connection = ConnectionState::Connecting;
             state.last_error = None;
+            state.pending_alarm = None;
         }
 
         // Attempt connection via worker
@@ -169,6 +170,7 @@ impl Controller {
         state.connection = ConnectionState::Disconnected;
         state.status = MachineStatus::default();
         state.welcome_message = None;
+        state.pending_alarm = None;
 
         Ok(())
     }
@@ -188,22 +190,34 @@ impl Controller {
 
     /// Query and update machine status.
     ///
-    /// This properly waits for a status report from the device (with timeout),
-    /// rather than doing a single non-blocking read.
+    /// Waits for a status report from the device (with timeout).
+    /// Also captures any alarm/error seen during polling.
     pub fn poll_status(&self) -> Result<MachineStatus, ControllerError> {
         if !self.is_connected() {
             return Err(ControllerError::NotConnected);
         }
 
         match self.worker.query_status() {
-            Ok(status) => {
+            Ok(result) => {
                 let mut state = self.state.lock();
-                state.status = status.clone();
-                Ok(status)
-            }
-            Err(WorkerError::Timeout { .. }) => {
-                // On timeout, return cached status rather than failing
-                Ok(self.state.lock().status.clone())
+
+                // Update status if we got one
+                if let Some(status) = result.status {
+                    state.status = status;
+                }
+
+                // Record alarm if we saw one during polling
+                if let Some(alarm_code) = result.alarm {
+                    state.pending_alarm = Some(alarm_code);
+                    state.last_error = Some(format!("ALARM:{}", alarm_code));
+                }
+
+                // Record error if we saw one
+                if let Some(error_code) = result.error {
+                    state.last_error = Some(format!("error:{}", error_code));
+                }
+
+                Ok(state.status.clone())
             }
             Err(e) => {
                 let mut state = self.state.lock();
@@ -218,6 +232,11 @@ impl Controller {
         self.state.lock().status.clone()
     }
 
+    /// Check and clear pending alarm (returns alarm code if one was detected).
+    pub fn take_pending_alarm(&self) -> Option<u32> {
+        self.state.lock().pending_alarm.take()
+    }
+
     /// Send home command.
     pub fn home(&self) -> Result<(), ControllerError> {
         self.send_command(protocol::system::HOME)
@@ -225,6 +244,8 @@ impl Controller {
 
     /// Send unlock command.
     pub fn unlock(&self) -> Result<(), ControllerError> {
+        // Clear pending alarm on unlock attempt
+        self.state.lock().pending_alarm = None;
         self.send_command(protocol::system::UNLOCK)
     }
 
@@ -278,6 +299,7 @@ impl Controller {
         if result.is_ok() {
             let mut state = self.state.lock();
             state.status = MachineStatus::default();
+            state.pending_alarm = None;
         }
 
         result
@@ -323,6 +345,8 @@ pub struct ControllerSnapshot {
     pub status: MachineStatus,
     pub welcome_message: Option<String>,
     pub last_error: Option<String>,
+    /// Pending alarm code (if alarm detected during polling)
+    pub pending_alarm: Option<u32>,
 }
 
 impl Controller {
@@ -334,6 +358,7 @@ impl Controller {
             status: state.status.clone(),
             welcome_message: state.welcome_message.clone(),
             last_error: state.last_error.clone(),
+            pending_alarm: state.pending_alarm,
         }
     }
 }

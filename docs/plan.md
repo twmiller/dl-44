@@ -135,14 +135,18 @@ lib.rs              # App entry point and setup
 
 ### Serial Worker Architecture
 
-The GRBL serial layer uses a dedicated worker thread to prevent Tauri
-commands from blocking on serial I/O:
+The GRBL serial layer uses a dedicated worker thread for serial I/O.
+Tauri commands block waiting for worker responses (with 5s timeout),
+but serial I/O is isolated in the worker, preventing port access issues
+and enabling centralized timeout/retry handling.
 
 ```
 ┌─────────────────┐     mpsc channel      ┌─────────────────┐
 │  Tauri Command  │ ──── Request ───────► │  Serial Worker  │
 │   (main thread) │ ◄─── Response ─────── │    (thread)     │
-└─────────────────┘    oneshot channel    └─────────────────┘
+│   (blocks w/    │   (recv_timeout 5s)   │                 │
+│    timeout)     │                       │                 │
+└─────────────────┘                       └─────────────────┘
                                                   │
                                                   ▼
                                           ┌─────────────────┐
@@ -155,11 +159,13 @@ commands from blocking on serial I/O:
 - `Disconnect` - Close serial port
 - `SendCommand(cmd, retries, timeout)` - Send command, wait for ok/error
 - `SendRealtime(byte)` - Send single byte (no response expected)
-- `QueryStatus(timeout)` - Send `?`, wait for status report
+- `QueryStatus(timeout)` - Send `?`, wait for status report (captures alarm/error)
 
 **Retry/timeout policy:**
 - Commands that expect ok/error: 2 retries, 500ms per attempt
-- Status queries: 300ms timeout, returns cached on timeout
+- Input buffer drained before each retry (prevents stale ok consumption)
+- Status queries: 300ms timeout, captures alarm/error seen during wait
+- Response channel: 5s timeout prevents indefinite blocking if worker wedges
 - Errors surface to UI with structured codes (TIMEOUT, GRBL_ERROR, ALARM)
 
 ### UI Components (src/lib/)

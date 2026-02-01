@@ -1,12 +1,15 @@
-//! Serial worker thread for non-blocking GRBL communication.
+//! Serial worker thread for GRBL communication.
 //!
-//! This module provides a dedicated worker thread that handles all serial I/O,
-//! allowing Tauri commands to return immediately without blocking on serial ops.
+//! This module provides a dedicated worker thread that handles all serial I/O.
+//! While Tauri command handlers still block waiting for responses, the actual
+//! serial I/O is isolated in the worker thread, preventing issues with serial
+//! port access from multiple threads and providing centralized timeout handling.
 //!
 //! Architecture:
 //! - Main thread sends requests via mpsc channel
 //! - Worker thread processes requests and sends responses via oneshot channels
-//! - Worker handles retries and timeouts internally
+//! - Worker handles retries, timeouts, and buffer management internally
+//! - Response channel has a timeout to prevent indefinite blocking
 
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -23,6 +26,9 @@ use super::status::MachineStatus;
 pub const DEFAULT_RETRIES: u32 = 2;
 pub const DEFAULT_TIMEOUT_MS: u64 = 500;
 pub const STATUS_TIMEOUT_MS: u64 = 300;
+
+/// Timeout for waiting on worker response (prevents indefinite blocking)
+const RESPONSE_CHANNEL_TIMEOUT_MS: u64 = 5000;
 
 /// Worker errors
 #[derive(Error, Debug, Clone)]
@@ -45,11 +51,8 @@ pub enum WorkerError {
     #[error("GRBL alarm code {0}")]
     Alarm(u32),
 
-    #[error("Worker thread died")]
+    #[error("Worker thread not responding")]
     WorkerDead,
-
-    #[error("Request cancelled")]
-    Cancelled,
 }
 
 /// Response channel type
@@ -84,11 +87,19 @@ pub enum WorkerRequest {
     /// Query status and wait for status report
     QueryStatus {
         timeout_ms: u64,
-        response_tx: ResponseTx<MachineStatus>,
+        response_tx: ResponseTx<StatusQueryResult>,
     },
 
     /// Shutdown the worker thread
     Shutdown,
+}
+
+/// Result of a status query - may include alarm/error seen during polling
+#[derive(Debug, Clone)]
+pub struct StatusQueryResult {
+    pub status: Option<MachineStatus>,
+    pub alarm: Option<u32>,
+    pub error: Option<u32>,
 }
 
 /// Handle to communicate with the serial worker
@@ -116,7 +127,10 @@ impl WorkerHandle {
         }
     }
 
-    /// Send a request to the worker and wait for response
+    /// Send a request to the worker and wait for response (with timeout).
+    ///
+    /// Note: This blocks the calling thread until the worker responds or times out.
+    /// The benefit is that serial I/O is isolated in the worker thread.
     fn send_request<T, F>(&self, make_request: F) -> Result<T, WorkerError>
     where
         F: FnOnce(ResponseTx<T>) -> WorkerRequest,
@@ -128,7 +142,16 @@ impl WorkerHandle {
             .send(request)
             .map_err(|_| WorkerError::WorkerDead)?;
 
-        response_rx.recv().map_err(|_| WorkerError::WorkerDead)?
+        // Use recv_timeout to prevent indefinite blocking if worker wedges
+        let timeout = Duration::from_millis(RESPONSE_CHANNEL_TIMEOUT_MS);
+        match response_rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                log::error!("Worker response timeout - worker may be wedged");
+                Err(WorkerError::WorkerDead)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WorkerError::WorkerDead),
+        }
     }
 
     /// Connect to a serial port
@@ -171,12 +194,15 @@ impl WorkerHandle {
     }
 
     /// Query status (waits for status report or timeout)
-    pub fn query_status(&self) -> Result<MachineStatus, WorkerError> {
+    pub fn query_status(&self) -> Result<StatusQueryResult, WorkerError> {
         self.query_status_with_timeout(STATUS_TIMEOUT_MS)
     }
 
     /// Query status with custom timeout
-    pub fn query_status_with_timeout(&self, timeout_ms: u64) -> Result<MachineStatus, WorkerError> {
+    pub fn query_status_with_timeout(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<StatusQueryResult, WorkerError> {
         self.send_request(|response_tx| WorkerRequest::QueryStatus {
             timeout_ms,
             response_tx,
@@ -257,6 +283,23 @@ impl SerialConnection {
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(WorkerError::Io(e.to_string())),
         }
+    }
+
+    /// Drain all pending input from the serial buffer.
+    /// This prevents stale responses from being consumed by subsequent commands.
+    fn drain_input(&mut self) -> Vec<Response> {
+        let mut responses = Vec::new();
+        loop {
+            match self.read_line() {
+                Ok(Some(line)) if !line.is_empty() => {
+                    let resp = protocol::parse_response(&line);
+                    log::trace!("Drained: {:?}", resp);
+                    responses.push(resp);
+                }
+                _ => break,
+            }
+        }
+        responses
     }
 
     fn clear_buffers(&mut self) -> Result<(), WorkerError> {
@@ -396,6 +439,19 @@ impl SerialWorker {
 
         loop {
             attempts += 1;
+
+            // IMPORTANT: Drain any stale responses before each attempt.
+            // This prevents late ok/error from a previous attempt being
+            // consumed by a retry.
+            let stale = conn.drain_input();
+            if !stale.is_empty() {
+                log::debug!(
+                    "Drained {} stale response(s) before attempt {}",
+                    stale.len(),
+                    attempts
+                );
+            }
+
             log::debug!("Sending command (attempt {}): {}", attempts, command.trim());
 
             // Send the command
@@ -420,7 +476,8 @@ impl SerialWorker {
                             return Err(WorkerError::Alarm(code));
                         }
                         _ => {
-                            // Ignore other responses (status reports, etc.)
+                            // Log but continue waiting (status reports, messages, etc.)
+                            log::trace!("Ignored during command wait: {:?}", response);
                         }
                     }
                 }
@@ -448,29 +505,53 @@ impl SerialWorker {
         Ok(())
     }
 
-    fn handle_query_status(&mut self, timeout_ms: u64) -> Result<MachineStatus, WorkerError> {
+    fn handle_query_status(&mut self, timeout_ms: u64) -> Result<StatusQueryResult, WorkerError> {
         let conn = self.connection.as_mut().ok_or(WorkerError::NotConnected)?;
 
         // Send status query
         conn.write_bytes(&[protocol::realtime::STATUS_QUERY])?;
 
-        // Wait for status report
+        // Wait for status report, but also capture any alarm/error we see
         let start = Instant::now();
         let timeout = Duration::from_millis(timeout_ms);
+
+        let mut result = StatusQueryResult {
+            status: None,
+            alarm: None,
+            error: None,
+        };
 
         while start.elapsed() < timeout {
             if let Ok(Some(line)) = conn.read_line() {
                 let response = protocol::parse_response(&line);
-                if let Response::Status(report) = response {
-                    if let Some(status) = MachineStatus::parse(&report) {
-                        return Ok(status);
+                match response {
+                    Response::Status(report) => {
+                        if let Some(status) = MachineStatus::parse(&report) {
+                            result.status = Some(status);
+                            // Got status, return immediately
+                            return Ok(result);
+                        }
+                    }
+                    Response::Alarm(code) => {
+                        log::warn!("Alarm {} during status query", code);
+                        result.alarm = Some(code);
+                        // Continue waiting for status, but record alarm
+                    }
+                    Response::Error(code) => {
+                        log::warn!("Error {} during status query", code);
+                        result.error = Some(code);
+                        // Continue waiting for status, but record error
+                    }
+                    _ => {
+                        log::trace!("Ignored during status query: {:?}", response);
                     }
                 }
             }
             thread::sleep(Duration::from_millis(5));
         }
 
-        Err(WorkerError::Timeout { attempts: 1 })
+        // Timeout - return what we have (may include alarm/error but no status)
+        Ok(result)
     }
 }
 

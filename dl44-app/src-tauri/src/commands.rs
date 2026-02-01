@@ -36,7 +36,6 @@ impl From<ControllerError> for CommandError {
             ControllerError::Alarm(code) => ("ALARM".into(), Some(format!("code {}", code))),
             ControllerError::InvalidState(_) => ("INVALID_STATE".into(), None),
             ControllerError::Serial(_) => ("SERIAL_ERROR".into(), None),
-            ControllerError::CommandFailed(_) => ("COMMAND_FAILED".into(), None),
             ControllerError::Internal(_) => ("INTERNAL_ERROR".into(), None),
         };
 

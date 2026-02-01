@@ -1,30 +1,43 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import {
     lastError,
     dismissError,
     getErrorMessage,
-    type UIError,
   } from "../stores/machine";
 
   // Auto-dismiss after 8 seconds
   let dismissTimer: ReturnType<typeof setTimeout> | null = null;
   let currentErrorId: number | null = null;
 
+  function clearTimer() {
+    if (dismissTimer) {
+      clearTimeout(dismissTimer);
+      dismissTimer = null;
+    }
+  }
+
   $: if ($lastError && $lastError.id !== currentErrorId) {
     currentErrorId = $lastError.id;
 
     // Clear previous timer
-    if (dismissTimer) {
-      clearTimeout(dismissTimer);
-    }
+    clearTimer();
 
     // Set new auto-dismiss timer
+    const errorId = $lastError.id;
     dismissTimer = setTimeout(() => {
-      if ($lastError) {
-        dismissError($lastError.id);
-      }
+      dismissError(errorId);
     }, 8000);
+  } else if (!$lastError) {
+    // No error, clear any pending timer
+    clearTimer();
+    currentErrorId = null;
   }
+
+  // Clean up timer on component destroy
+  onDestroy(() => {
+    clearTimer();
+  });
 
   function handleDismiss() {
     if ($lastError) {

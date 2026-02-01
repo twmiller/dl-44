@@ -70,6 +70,7 @@ export interface ControllerSnapshot {
   status: MachineStatus;
   welcome_message: string | null;
   last_error: string | null;
+  pending_alarm: number | null;
 }
 
 /** Structured error from backend commands */
@@ -193,6 +194,12 @@ export const workPosition = derived(
 
 export const connected = derived(connectionState, ($state) =>
   isConnected($state)
+);
+
+/** Pending alarm code from device (detected during status polling) */
+export const pendingAlarm = derived(
+  controllerSnapshot,
+  ($snapshot) => $snapshot?.pending_alarm ?? null
 );
 
 // Error management
@@ -323,6 +330,16 @@ export async function pollStatus(): Promise<void> {
   try {
     await invoke("poll_status");
     await refreshSnapshot();
+
+    // Check for alarm detected during polling and surface it
+    const snapshot = get(controllerSnapshot);
+    if (snapshot?.pending_alarm) {
+      addError({
+        message: `Alarm ${snapshot.pending_alarm}: Machine requires attention`,
+        code: "ALARM",
+        details: `code ${snapshot.pending_alarm}`,
+      });
+    }
   } catch (e) {
     // Don't spam errors for polling failures - they're expected during disconnects
     console.warn("Poll status failed:", e);
