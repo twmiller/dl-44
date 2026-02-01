@@ -1,9 +1,9 @@
 //! High-level GRBL controller coordinating serial worker and state.
 //!
 //! The controller maintains machine state and delegates all serial I/O
-//! to a dedicated worker thread. While command handlers block waiting for
-//! the worker response, the actual serial I/O is isolated, preventing
-//! issues with port access and providing centralized timeout handling.
+//! to a dedicated worker thread. Command handlers block waiting for
+//! the worker response, but serial I/O is isolated, preventing port
+//! access issues and providing centralized timeout handling.
 
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use thiserror::Error;
 use super::protocol;
 use super::serial::PortInfo;
 use super::status::{MachineState, MachineStatus};
-use super::worker::{WorkerError, WorkerHandle};
+use super::worker::{WorkerError, WorkerHandle, HOMING_TIMEOUT_MS};
 
 /// Controller errors (UI-facing)
 #[derive(Error, Debug, Clone, serde::Serialize)]
@@ -51,7 +51,9 @@ impl From<WorkerError> for ControllerError {
             WorkerError::Timeout { attempts } => ControllerError::Timeout(attempts),
             WorkerError::GrblError(code) => ControllerError::GrblError(code),
             WorkerError::Alarm(code) => ControllerError::Alarm(code),
-            WorkerError::WorkerDead => ControllerError::Internal("Worker thread not responding".into()),
+            WorkerError::WorkerDead => {
+                ControllerError::Internal("Worker thread not responding".into())
+            }
         }
     }
 }
@@ -78,8 +80,12 @@ struct ControllerState {
     status: MachineStatus,
     last_error: Option<String>,
     welcome_message: Option<String>,
-    /// Alarm code if device entered alarm during polling
-    pending_alarm: Option<u32>,
+    /// Alarm code if device entered alarm during polling (with unique ID for dedup)
+    pending_alarm: Option<(u32, u64)>, // (alarm_code, alarm_id)
+    /// Counter for generating unique alarm IDs
+    alarm_id_counter: u64,
+    /// Whether the last status poll got a fresh response
+    status_is_fresh: bool,
 }
 
 /// GRBL controller instance.
@@ -171,6 +177,7 @@ impl Controller {
         state.status = MachineStatus::default();
         state.welcome_message = None;
         state.pending_alarm = None;
+        state.status_is_fresh = false;
 
         Ok(())
     }
@@ -201,15 +208,30 @@ impl Controller {
             Ok(result) => {
                 let mut state = self.state.lock();
 
+                // Update freshness indicator
+                state.status_is_fresh = result.is_fresh;
+
                 // Update status if we got one
                 if let Some(status) = result.status {
                     state.status = status;
+                    // Clear stale alarm if we have a fresh, non-alarm state
+                    if result.is_fresh && state.status.state != MachineState::Alarm {
+                        state.pending_alarm = None;
+                    }
                 }
 
-                // Record alarm if we saw one during polling
+                // Record alarm if we saw a NEW one during polling
+                // Only set pending_alarm if it's a different alarm than we already have
                 if let Some(alarm_code) = result.alarm {
-                    state.pending_alarm = Some(alarm_code);
-                    state.last_error = Some(format!("ALARM:{}", alarm_code));
+                    let should_set = match state.pending_alarm {
+                        Some((existing_code, _)) => existing_code != alarm_code,
+                        None => true,
+                    };
+                    if should_set {
+                        state.alarm_id_counter += 1;
+                        state.pending_alarm = Some((alarm_code, state.alarm_id_counter));
+                        state.last_error = Some(format!("ALARM:{}", alarm_code));
+                    }
                 }
 
                 // Record error if we saw one
@@ -222,6 +244,7 @@ impl Controller {
             Err(e) => {
                 let mut state = self.state.lock();
                 state.last_error = Some(e.to_string());
+                state.status_is_fresh = false;
                 Err(e.into())
             }
         }
@@ -232,14 +255,22 @@ impl Controller {
         self.state.lock().status.clone()
     }
 
-    /// Check and clear pending alarm (returns alarm code if one was detected).
-    pub fn take_pending_alarm(&self) -> Option<u32> {
-        self.state.lock().pending_alarm.take()
-    }
-
     /// Send home command.
+    ///
+    /// Uses a longer timeout since homing can take 30+ seconds on large machines.
     pub fn home(&self) -> Result<(), ControllerError> {
-        self.send_command(protocol::system::HOME)
+        if !self.is_connected() {
+            return Err(ControllerError::NotConnected);
+        }
+
+        // Homing: no retries (it either works or alarms), long timeout
+        self.worker
+            .send_command_with_policy(protocol::system::HOME, 0, HOMING_TIMEOUT_MS)
+            .map_err(|e| {
+                let mut state = self.state.lock();
+                state.last_error = Some(e.to_string());
+                e.into()
+            })
     }
 
     /// Send unlock command.
@@ -300,12 +331,13 @@ impl Controller {
             let mut state = self.state.lock();
             state.status = MachineStatus::default();
             state.pending_alarm = None;
+            state.status_is_fresh = false;
         }
 
         result
     }
 
-    /// Send a command with retry/timeout policy.
+    /// Send a command with default retry/timeout policy.
     fn send_command(&self, cmd: &str) -> Result<(), ControllerError> {
         if !self.is_connected() {
             return Err(ControllerError::NotConnected);
@@ -345,8 +377,10 @@ pub struct ControllerSnapshot {
     pub status: MachineStatus,
     pub welcome_message: Option<String>,
     pub last_error: Option<String>,
-    /// Pending alarm code (if alarm detected during polling)
-    pub pending_alarm: Option<u32>,
+    /// Pending alarm: (alarm_code, unique_id) - ID for deduplication
+    pub pending_alarm: Option<(u32, u64)>,
+    /// Whether the last status poll got a fresh response (false = stale/timeout)
+    pub status_is_fresh: bool,
 }
 
 impl Controller {
@@ -359,6 +393,7 @@ impl Controller {
             welcome_message: state.welcome_message.clone(),
             last_error: state.last_error.clone(),
             pending_alarm: state.pending_alarm,
+            status_is_fresh: state.status_is_fresh,
         }
     }
 }

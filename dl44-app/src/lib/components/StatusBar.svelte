@@ -5,6 +5,7 @@
     workPosition,
     machineStatus,
     connected,
+    statusIsFresh,
   } from "../stores/machine";
 
   function formatPos(n: number): string {
@@ -59,6 +60,12 @@
         </div>
       </div>
     </div>
+
+    {#if !$statusIsFresh}
+      <div class="stale-indicator" title="Last status update timed out">
+        STALE
+      </div>
+    {/if}
 
     {#if $machineStatus?.feed_rate !== null}
       <div class="rate-display">
@@ -154,6 +161,16 @@
     align-items: center;
     gap: 0.25rem;
     color: #888;
+  }
+
+  .stale-indicator {
+    padding: 0.2rem 0.5rem;
+    border: 1px solid #ff9800;
+    border-radius: 4px;
+    color: #ff9800;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .rate-label {

@@ -1,7 +1,7 @@
 //! Serial worker thread for GRBL communication.
 //!
 //! This module provides a dedicated worker thread that handles all serial I/O.
-//! While Tauri command handlers still block waiting for responses, the actual
+//! Tauri command handlers block waiting for worker responses, but the actual
 //! serial I/O is isolated in the worker thread, preventing issues with serial
 //! port access from multiple threads and providing centralized timeout handling.
 //!
@@ -9,7 +9,7 @@
 //! - Main thread sends requests via mpsc channel
 //! - Worker thread processes requests and sends responses via oneshot channels
 //! - Worker handles retries, timeouts, and buffer management internally
-//! - Response channel has a timeout to prevent indefinite blocking
+//! - Response channel timeout is dynamic based on command type
 
 use std::io::{BufRead, BufReader, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -27,8 +27,11 @@ pub const DEFAULT_RETRIES: u32 = 2;
 pub const DEFAULT_TIMEOUT_MS: u64 = 500;
 pub const STATUS_TIMEOUT_MS: u64 = 300;
 
-/// Timeout for waiting on worker response (prevents indefinite blocking)
-const RESPONSE_CHANNEL_TIMEOUT_MS: u64 = 5000;
+/// Timeout for homing - can take 30+ seconds on large machines
+pub const HOMING_TIMEOUT_MS: u64 = 120_000; // 2 minutes
+
+/// Base response channel timeout (added to command timeout)
+const RESPONSE_CHANNEL_MARGIN_MS: u64 = 1000;
 
 /// Worker errors
 #[derive(Error, Debug, Clone)]
@@ -100,6 +103,8 @@ pub struct StatusQueryResult {
     pub status: Option<MachineStatus>,
     pub alarm: Option<u32>,
     pub error: Option<u32>,
+    /// True if we got a fresh status response, false if timed out
+    pub is_fresh: bool,
 }
 
 /// Handle to communicate with the serial worker
@@ -127,11 +132,15 @@ impl WorkerHandle {
         }
     }
 
-    /// Send a request to the worker and wait for response (with timeout).
+    /// Send a request to the worker and wait for response.
     ///
-    /// Note: This blocks the calling thread until the worker responds or times out.
-    /// The benefit is that serial I/O is isolated in the worker thread.
-    fn send_request<T, F>(&self, make_request: F) -> Result<T, WorkerError>
+    /// The response timeout is dynamic based on the expected command duration.
+    /// This blocks the calling thread until the worker responds or times out.
+    fn send_request_with_timeout<T, F>(
+        &self,
+        expected_duration_ms: u64,
+        make_request: F,
+    ) -> Result<T, WorkerError>
     where
         F: FnOnce(ResponseTx<T>) -> WorkerRequest,
     {
@@ -142,12 +151,15 @@ impl WorkerHandle {
             .send(request)
             .map_err(|_| WorkerError::WorkerDead)?;
 
-        // Use recv_timeout to prevent indefinite blocking if worker wedges
-        let timeout = Duration::from_millis(RESPONSE_CHANNEL_TIMEOUT_MS);
+        // Response timeout = expected command time + margin
+        let timeout = Duration::from_millis(expected_duration_ms + RESPONSE_CHANNEL_MARGIN_MS);
         match response_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                log::error!("Worker response timeout - worker may be wedged");
+                log::error!(
+                    "Worker response timeout after {}ms - worker may be wedged",
+                    expected_duration_ms + RESPONSE_CHANNEL_MARGIN_MS
+                );
                 Err(WorkerError::WorkerDead)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(WorkerError::WorkerDead),
@@ -156,7 +168,8 @@ impl WorkerHandle {
 
     /// Connect to a serial port
     pub fn connect(&self, port: &str, baud_rate: u32) -> Result<String, WorkerError> {
-        self.send_request(|response_tx| WorkerRequest::Connect {
+        // Connection can take up to ~1.5s (open + reset + welcome)
+        self.send_request_with_timeout(2000, |response_tx| WorkerRequest::Connect {
             port: port.to_string(),
             baud_rate,
             response_tx,
@@ -165,7 +178,9 @@ impl WorkerHandle {
 
     /// Disconnect from current port
     pub fn disconnect(&self) -> Result<(), WorkerError> {
-        self.send_request(|response_tx| WorkerRequest::Disconnect { response_tx })
+        self.send_request_with_timeout(500, |response_tx| WorkerRequest::Disconnect {
+            response_tx,
+        })
     }
 
     /// Send a command with default retry/timeout policy
@@ -180,17 +195,24 @@ impl WorkerHandle {
         retries: u32,
         timeout_ms: u64,
     ) -> Result<(), WorkerError> {
-        self.send_request(|response_tx| WorkerRequest::SendCommand {
-            command: command.to_string(),
-            retries,
-            timeout_ms,
-            response_tx,
+        // Total time = (retries + 1) * timeout_ms
+        let expected_duration = (retries as u64 + 1) * timeout_ms;
+        self.send_request_with_timeout(expected_duration, |response_tx| {
+            WorkerRequest::SendCommand {
+                command: command.to_string(),
+                retries,
+                timeout_ms,
+                response_tx,
+            }
         })
     }
 
     /// Send a real-time command
     pub fn send_realtime(&self, byte: u8) -> Result<(), WorkerError> {
-        self.send_request(|response_tx| WorkerRequest::SendRealtime { byte, response_tx })
+        self.send_request_with_timeout(500, |response_tx| WorkerRequest::SendRealtime {
+            byte,
+            response_tx,
+        })
     }
 
     /// Query status (waits for status report or timeout)
@@ -203,7 +225,7 @@ impl WorkerHandle {
         &self,
         timeout_ms: u64,
     ) -> Result<StatusQueryResult, WorkerError> {
-        self.send_request(|response_tx| WorkerRequest::QueryStatus {
+        self.send_request_with_timeout(timeout_ms, |response_tx| WorkerRequest::QueryStatus {
             timeout_ms,
             response_tx,
         })
@@ -519,6 +541,7 @@ impl SerialWorker {
             status: None,
             alarm: None,
             error: None,
+            is_fresh: false,
         };
 
         while start.elapsed() < timeout {
@@ -528,6 +551,7 @@ impl SerialWorker {
                     Response::Status(report) => {
                         if let Some(status) = MachineStatus::parse(&report) {
                             result.status = Some(status);
+                            result.is_fresh = true;
                             // Got status, return immediately
                             return Ok(result);
                         }
@@ -550,7 +574,7 @@ impl SerialWorker {
             thread::sleep(Duration::from_millis(5));
         }
 
-        // Timeout - return what we have (may include alarm/error but no status)
+        // Timeout - return what we have (is_fresh = false indicates stale)
         Ok(result)
     }
 }

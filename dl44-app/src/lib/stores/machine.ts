@@ -70,7 +70,10 @@ export interface ControllerSnapshot {
   status: MachineStatus;
   welcome_message: string | null;
   last_error: string | null;
-  pending_alarm: number | null;
+  /** Pending alarm: [alarm_code, unique_id] for deduplication */
+  pending_alarm: [number, number] | null;
+  /** Whether the last status poll got a fresh response (false = stale/timeout) */
+  status_is_fresh: boolean;
 }
 
 /** Structured error from backend commands */
@@ -196,11 +199,20 @@ export const connected = derived(connectionState, ($state) =>
   isConnected($state)
 );
 
-/** Pending alarm code from device (detected during status polling) */
+/** Pending alarm: [alarm_code, alarm_id] from device (detected during status polling) */
 export const pendingAlarm = derived(
   controllerSnapshot,
   ($snapshot) => $snapshot?.pending_alarm ?? null
 );
+
+/** Whether the last status poll got a fresh response */
+export const statusIsFresh = derived(
+  controllerSnapshot,
+  ($snapshot) => $snapshot?.status_is_fresh ?? false
+);
+
+/** Track which alarm IDs we've already surfaced to avoid spam */
+let lastSurfacedAlarmId: number | null = null;
 
 // Error management
 
@@ -307,6 +319,7 @@ export async function connect(): Promise<void> {
 /** Disconnect from the device */
 export async function disconnect(): Promise<void> {
   stopPolling();
+  lastSurfacedAlarmId = null; // Reset alarm tracking
   try {
     await invoke("disconnect");
   } catch (e) {
@@ -331,14 +344,19 @@ export async function pollStatus(): Promise<void> {
     await invoke("poll_status");
     await refreshSnapshot();
 
-    // Check for alarm detected during polling and surface it
+    // Check for NEW alarm detected during polling and surface it (once)
     const snapshot = get(controllerSnapshot);
     if (snapshot?.pending_alarm) {
-      addError({
-        message: `Alarm ${snapshot.pending_alarm}: Machine requires attention`,
-        code: "ALARM",
-        details: `code ${snapshot.pending_alarm}`,
-      });
+      const [alarmCode, alarmId] = snapshot.pending_alarm;
+      // Only surface if this is a new alarm we haven't already shown
+      if (alarmId !== lastSurfacedAlarmId) {
+        lastSurfacedAlarmId = alarmId;
+        addError({
+          message: `Alarm ${alarmCode}: Machine requires attention`,
+          code: "ALARM",
+          details: `code ${alarmCode}`,
+        });
+      }
     }
   } catch (e) {
     // Don't spam errors for polling failures - they're expected during disconnects

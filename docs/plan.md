@@ -136,15 +136,16 @@ lib.rs              # App entry point and setup
 ### Serial Worker Architecture
 
 The GRBL serial layer uses a dedicated worker thread for serial I/O.
-Tauri commands block waiting for worker responses (with 5s timeout),
-but serial I/O is isolated in the worker, preventing port access issues
-and enabling centralized timeout/retry handling.
+Tauri commands block waiting for worker responses, but the response
+channel timeout is dynamic based on expected command duration. Serial
+I/O is isolated in the worker, preventing port access issues and
+enabling centralized timeout/retry handling.
 
 ```
 ┌─────────────────┐     mpsc channel      ┌─────────────────┐
 │  Tauri Command  │ ──── Request ───────► │  Serial Worker  │
 │   (main thread) │ ◄─── Response ─────── │    (thread)     │
-│   (blocks w/    │   (recv_timeout 5s)   │                 │
+│   (blocks w/    │   (dynamic timeout)   │                 │
 │    timeout)     │                       │                 │
 └─────────────────┘                       └─────────────────┘
                                                   │
@@ -159,13 +160,15 @@ and enabling centralized timeout/retry handling.
 - `Disconnect` - Close serial port
 - `SendCommand(cmd, retries, timeout)` - Send command, wait for ok/error
 - `SendRealtime(byte)` - Send single byte (no response expected)
-- `QueryStatus(timeout)` - Send `?`, wait for status report (captures alarm/error)
+- `QueryStatus(timeout)` - Send `?`, wait for status report
 
 **Retry/timeout policy:**
-- Commands that expect ok/error: 2 retries, 500ms per attempt
+- Regular commands: 2 retries, 500ms per attempt
+- Homing ($H): 0 retries, 120s timeout (large machines need time)
 - Input buffer drained before each retry (prevents stale ok consumption)
-- Status queries: 300ms timeout, captures alarm/error seen during wait
-- Response channel: 5s timeout prevents indefinite blocking if worker wedges
+- Status queries: 300ms timeout, returns `is_fresh=false` on timeout
+- Alarms: captured during polling with unique ID for deduplication
+- Response channel timeout = expected_duration + 1s margin
 - Errors surface to UI with structured codes (TIMEOUT, GRBL_ERROR, ALARM)
 
 ### UI Components (src/lib/)
