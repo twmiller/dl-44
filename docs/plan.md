@@ -8,6 +8,14 @@ This plan uses the feature tiers in `docs/dl44-features.md` as the primary timel
 - Repo hygiene, tooling, and a bootstrapped desktop shell.
 - Goal: Svelte + Rust + Tauri app runs on macOS and Linux.
 
+Phase 0 checklist:
+- [x] Root `.gitignore`
+- [x] Tauri v2 + Svelte app boots and runs
+- [x] Rust toolchain file in place
+- [x] README with setup/run steps
+- [x] Repo layout agreed (UI + core crates plan)
+- [ ] CI skeleton (optional for now)
+
 ### Phase 1 - Tier 1 (MVP)
 - Core daily-driver capabilities: connect, import, layer ops, generate GCode, preview, stream, control.
 - Goal: burn a simple SVG and a raster image reliably.
@@ -103,6 +111,87 @@ Acceptance criteria:
 4) Preview + time estimate
 5) Job streaming + pause/resume/stop
 6) Raster pipeline improvements
+
+## Architecture Notes
+
+### Rust Crate Structure (src-tauri/src/)
+```
+grbl/
+├── mod.rs          # Module exports
+├── protocol.rs     # GRBL commands, constants, response parsing
+├── serial.rs       # Port enumeration only
+├── status.rs       # Machine status types and parsing
+├── worker.rs       # Dedicated serial I/O thread
+└── controller.rs   # High-level controller (delegates to worker)
+commands.rs         # Tauri command handlers
+lib.rs              # App entry point and setup
+```
+
+### Key Rust Crates
+- `serialport` - Cross-platform serial I/O
+- `thiserror` - Ergonomic error types
+- `parking_lot` - Fast mutex for shared controller state
+- `log` / `env_logger` - Logging
+
+### Serial Worker Architecture
+
+The GRBL serial layer uses a dedicated worker thread to prevent Tauri
+commands from blocking on serial I/O:
+
+```
+┌─────────────────┐     mpsc channel      ┌─────────────────┐
+│  Tauri Command  │ ──── Request ───────► │  Serial Worker  │
+│   (main thread) │ ◄─── Response ─────── │    (thread)     │
+└─────────────────┘    oneshot channel    └─────────────────┘
+                                                  │
+                                                  ▼
+                                          ┌─────────────────┐
+                                          │   Serial Port   │
+                                          └─────────────────┘
+```
+
+**Request types:**
+- `Connect(port, baud)` - Open serial port, wait for welcome message
+- `Disconnect` - Close serial port
+- `SendCommand(cmd, retries, timeout)` - Send command, wait for ok/error
+- `SendRealtime(byte)` - Send single byte (no response expected)
+- `QueryStatus(timeout)` - Send `?`, wait for status report
+
+**Retry/timeout policy:**
+- Commands that expect ok/error: 2 retries, 500ms per attempt
+- Status queries: 300ms timeout, returns cached on timeout
+- Errors surface to UI with structured codes (TIMEOUT, GRBL_ERROR, ALARM)
+
+### UI Components (src/lib/)
+```
+components/
+├── ConnectionPanel.svelte   # Port list, baud, connect/disconnect
+├── StatusBar.svelte         # State, position display
+├── JogControls.svelte       # XYZ jog buttons, step selector
+├── MachinePanel.svelte      # Container panel
+└── ErrorToast.svelte        # Error notification toast
+stores/
+└── machine.ts               # Svelte stores with error handling
+```
+
+### GRBL Protocol Layer (minimal)
+- Status query: `?` → `<Idle|MPos:0.000,0.000,0.000|FS:0,0>`
+- Jog: `$J=G91 X10.0 F1000`
+- Home: `$H`
+- Real-time: `!` (hold), `~` (resume), `0x18` (reset), `0x85` (jog cancel)
+
+### Tier-1 Vertical Slice Progress
+1) [x] USB connect -> status -> jog/home (scaffolding complete)
+   - Serial port listing and connection
+   - GRBL status parsing
+   - Jog controls with step/feed selection
+   - Home/unlock/reset commands
+2) [ ] Overrides implementation
+3) [ ] SVG/bitmap import -> workspace render
+4) [ ] Layers/ops -> GCode generation
+5) [ ] Preview + time estimate
+6) [ ] Job streaming + pause/resume/stop
+7) [ ] Raster pipeline improvements
 
 ## Notes
 - macOS and Linux are first-class; Windows support is optional.

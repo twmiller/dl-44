@@ -1,0 +1,29 @@
+<script lang="ts">
+  import ConnectionPanel from "./ConnectionPanel.svelte";
+  import StatusBar from "./StatusBar.svelte";
+  import JogControls from "./JogControls.svelte";
+</script>
+
+<div class="machine-panel">
+  <StatusBar />
+  <div class="panel-content">
+    <ConnectionPanel />
+    <JogControls />
+  </div>
+</div>
+
+<style>
+  .machine-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+    max-width: 600px;
+  }
+
+  .panel-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+</style>
